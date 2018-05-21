@@ -3,87 +3,94 @@
 const assert               = require('assert');
 const { describe, it }     = require('mocha');
 const { createConnection } = require('net');
+const contact              = require('../lib/contact');
 const Server               = require('../lib/server');
 const Peer                 = require('../lib/peer');
 
-let peer;
-let server;
+let peers = [];
+const server = new Server({
+  host: 'localhost',
+  port: 44444
+});
 
-const port = 22222;
-
-describe( 'server', () => {
-  it( 'creates a server', () => {
-    server = new Server({ port });
-  });
-
-  it( 'initializes a server', () => {
+const startServer = () => {
+  it( 'starts the server', done => {
     server.init();
+    server.start( done );
   });
+};
 
-  it( 'starts a server', done => {
-    server.once( 'started', done );
-    server.start();
-  });
-
-  it( 'creates a peer and connects it to the server', done => {
-    const conn = createConnection( port, () => {
-      peer = new Peer( conn );
-      done();
-    });
-  });
-
-  it( 'receives server requestHandshake', done => {
-    peer.waitForMessage( msg => {
-      assert.deepStrictEqual( msg, {
-        cmd: 'requestHandshake',
-        data: { address: 'localhost', port }
-      });
-      done();
-    });
-  });
-
-  it( 'sends peer requestHandshake', () => {
-    peer.requestHandshake({ address: 'localhost', port: port + 1 });
-  });
-
-  it( 'receives server respondHandshake', done => {
-    peer.waitForMessage( msg => {
-      assert.deepStrictEqual( msg, {
-        cmd: 'respondHandshake',
-        data: { success: true }
-      });
-      done();
-    });
-  });
-
-  it( 'sends peer respondHandshake', () => {
-    peer.respondHandshake( true );
-  });
-
-  it( 'checks that server has 1 peer', () => {
-    assert.equal( server.peers.length, 1 );
-  });
-
-  it( 'sends and receives server updateState', done => {
-    peer.waitForMessage( msg => {
-      assert.deepStrictEqual( msg, {
-        cmd: 'updateState',
-        data: { a: 1 }
-      });
-      done();
-    });
-    server.updateState({ a: 1 });
-  });
-
-  it( 'receives peer updateState', done => {
-    server.once( 'updated', peer => {
-      assert.deepStrictEqual( peer.state, { b: 2 });
-      done();
-    });
-    peer.updateState({ b: 2 });
-  });
-
-  it( 'stops a server', () => {
+const stopServer = () => {
+  it( 'stops the server', () => {
     server.stop();
   });
+};
+
+const checkConnectedPeers = expected => {
+  it( 'checks connected peers', () => {
+    server.peers.forEach( ( peer, i ) => {
+      assert( contact.equal( peer, expected[ i ] ) );
+    });
+  });
+};
+
+const updatePeers = () => {
+  peers.forEach( peer => peer.peers = peers );
+};
+
+const addPeer = ( info, peer ) => {
+  peer.contact = info;
+  peer.start();
+  peers.push( peer );
+  updatePeers();
+};
+
+const removePeer = peer => {
+  peer.stop();
+  peers = contact.getOthers( peers, peer );
+  updatePeers();
+};
+
+const connectPeer = info => {
+  it( 'connects peer to server', done => {
+    const conn = createConnection( server.contact, () => {
+      const peer = new Peer( conn );
+      peer.requestHandshake( info );
+      peer.onceBefore( 'requestHandshake', data => {
+        assert.deepStrictEqual( data, server.contact );
+        peer.respondHandshake( true );
+      });
+      server.once( 'connectPeer', () => {
+        addPeer( info, peer );
+        done();
+      });
+    });
+  });
+};
+
+const disconnectPeer = info => {
+  it( 'disconnects peer from server', done => {
+    const peer = contact.get( peers, info );
+    peer.once( 'respondDisconnect', () => {
+      removePeer( peer );
+      done();
+    });
+    peer.requestDisconnect();
+  });
+};
+
+describe( 'server', () => {
+  startServer();
+  connectPeer('localhost:44445');
+  checkConnectedPeers([ `localhost:44445` ]);
+  connectPeer('localhost:44446');
+  checkConnectedPeers([ `localhost:44445`, `localhost:44446` ]);
+  connectPeer('localhost:44447');
+  disconnectPeer('localhost:44445');
+  checkConnectedPeers([ `localhost:44446`, 'localhost:44447' ]);
+  disconnectPeer('localhost:44446');
+  checkConnectedPeers([ 'localhost:44447' ]);
+  disconnectPeer('localhost:44447');
+  checkConnectedPeers([]);
+  stopServer();
 });

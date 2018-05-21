@@ -11,7 +11,7 @@ const decode = decoder( e );
 describe( 'message', () => {
   it( 'encodes and decodes a message', done => {
     const buf = encode({ cmd: 'request' });
-    e.once( 'queue', msg => {
+    e.once( 'message', msg => {
       assert.deepStrictEqual( msg, { cmd: 'request' });
       done();
     });
